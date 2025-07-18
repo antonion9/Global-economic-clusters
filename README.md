@@ -1,0 +1,1 @@
+This is my university project on R. All data is sourced from reliable databases of international organisations, such as World Bank, IMF, ILO etc. baseline year - 2022. Data is presented in the Excel file. Html is the final result. 
