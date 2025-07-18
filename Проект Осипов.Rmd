@@ -1,0 +1,549 @@
+---
+title: "Индивидуальный проект по дисциплине статистический анализ мировой экономики"
+author: "Осипов Антон"
+output:
+  html_document:
+    code_folding: show
+---
+
+```{r, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(cluster)
+library(factoextra)
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(kableExtra)
+library(caret)
+library(tidymodels)
+library(readxl)
+library(knitr)
+library(corrplot)
+library(psych)
+library(DT)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+```
+
+
+```{r}
+data = read_excel('D:data_project.xlsx')
+```
+
+```{r}
+data %>%
+  head() %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover"), full_width = FALSE)%>%
+  scroll_box(width = "100%", height = "100%")
+```
+
+Перенесем категориальную переменную на место названия строк
+```{r}
+data = data %>% 
+  column_to_rownames(var = 'Country')
+```
+
+Посмотрим на количество пропущенных значений по каждой переменной
+```{r}
+missing_values = data %>%
+  summarise(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(everything(), names_to = "Переменная", values_to = "Количество пропущенных значений")
+knitr::kable(missing_values)
+```
+
+Нетрудно заметить, что переменная государственных расходов на НИОКР имеет слишком большое количество пропущенных переменных, поэтому было принято решение удалить ее, чтобы расширить датасет. Кроме того, заменим пропущенные значения государственных расходов на образования на среднее значение. 
+```{r}
+data = data %>%
+  select(
+    -`Labor force with basic education (% of total working-age population with basic education)`, - 'Government expenditure on education, total (% of GDP)')
+data = na.omit(data)
+```
+
+По итогу у нас осталось 138 стран
+```{r}
+nrow(data)
+```
+```{r}
+model1 <- lm(`GDP growth(5year)` ~., data = data)
+```
+
+Кроме того, перенесем колонку среднего роста ВВП за последние 5 лет в новый датасет, поскольку она понадобится нам позже
+```{r}
+gdp_growth_table = data.frame(
+  Country = rownames(data),
+  `GDP growth(5year)` = data$`GDP growth(5year)`)
+
+data = data %>% select(-`GDP growth(5year)`)
+
+write.csv(gdp_growth_table, "gdp_growth_table.csv", row.names = FALSE)
+
+```
+
+
+```{r}
+data = data %>%
+  rename(
+    GDPCapita = `GDP per capita`,               
+    GDPCurrent = `GDP (current US$)`,      
+    Inflation = `Inflation (annual %)`,
+    ExtBalance = `External balance on goods and services (% of GDP)`,
+    AgriValue = `Agriculture, forestry, and fishing, value added (% of GDP)`,
+    ServValue = `Services, value added (% of GDP)`,
+    IndValue = `Industry value added (% of GDP)`,
+    PopGrowth = `Population growth (annual %)`,
+    TotalPop = `Population, total`,
+    UrbanPop = `Urban population (% of total population)`,
+    HealthExp = `Current health expenditure (% of GDP)`,
+    GovEffect = `Government Effectiveness: Estimate`,
+    PolStab = `Political Stability and Absence of Violence/Terrorism: Estimate`,
+    RegQuality = `Regulatory Quality: Estimate`,
+    CorrControl = `Control of Corruption: Estimate`,
+    RuleLaw = `Rule of Law: Estimate`,
+    VoiceAcc = `Voice and Accountability: Estimate`,
+    Unemployment = `Unemployment, total (% of total labor force) (modeled ILO estimate)`
+  )
+
+```
+
+Посмотрим на дескриптивные статистики переменных
+```{r}
+summary(data)
+```
+
+```{r}
+
+par(mfrow = c(2, 2), mar = c(5, 5, 1, 1))
+
+
+for (col in colnames(data)) {
+  if (is.numeric(data[[col]])) {
+    hist(
+      data[[col]],
+      main = '',
+      col = "steelblue",                   
+      border = "white",                 
+      xlab = col,                       
+      ylab = "Частота", 
+      xlim = range(data[[col]], na.rm = TRUE),
+      breaks = 50                       
+    )
+  }
+}
+
+par(mfrow = c(1, 1))
+
+
+```
+
+```{r}
+cor_matrix <- cor(data)
+cor_matrix
+```
+
+```{r}
+correlation_df = as.data.frame(as.table(cor_matrix))
+
+correlation_plot = ggplot(data = correlation_df, aes(Var1, Var2, fill = Freq)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0,
+                       limit = c(-1, 1), space = "Lab", name = "Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 6, hjust = 1), axis.text.y = element_text(size = 6)) + 
+  coord_fixed()
+
+print(correlation_plot)
+
+```
+**Метод главных компонент**
+
+```{r}
+scaled_data = scale(data)
+```
+
+```{r}
+set.seed(123)
+pr.out=prcomp(data, scale =TRUE)
+```
+
+```{r}
+pr.out$rotation
+```
+
+```{r}
+fviz_eig(pr.out, addlabels = TRUE)
+```
+
+```{r}
+pr_var = pr.out$sdev^2
+pve = pr_var / sum(pr_var)
+cumulative_variance = cumsum(pve)
+
+results_table = data.frame(
+  Component = seq_along(pve),
+  Explained_Variance = pve,
+  Cumulative_Variance = cumulative_variance)
+
+print(results_table)
+```
+
+```{r}
+round(cor(pr.out$rotation),
+      digits = 2)
+```
+
+```{r}
+set.seed(123)
+pca_rotated = principal(scaled_data, nfactors = 4, rotate = "varimax", scores = TRUE)
+rotated_loadings = pca_rotated$loadings
+print(rotated_loadings, cutoff = 0)
+```
+
+```{r}
+rotated_loadings = as.data.frame(unclass(pca_rotated$loadings))
+rotated_loadings$Variable <- rownames(rotated_loadings)
+
+variable_to_group = rotated_loadings %>%
+  mutate(Group = case_when(
+    Variable %in% c("GDPCapita", "GDPCurrent", "Inflation", "Unemployment") ~ "Экономика", 
+    Variable %in% c("ExtBalance", "AgriValue", "ServValue", "IndValue") ~ "Промышленность и Торговля", 
+    Variable %in% c("PopGrowth", "TotalPop", "UrbanPop", "MedianAge") ~ "Демография", 
+    Variable == "HealthExp" ~ "Здравоохранение",  
+    TRUE ~ "Управление"  
+  ))
+
+plot_contrib_with_groups = function(rotated_loadings, pc_col, variable_to_group) {
+
+  contrib_df = rotated_loadings %>%
+    select(Variable, Contribution = !!sym(pc_col)) %>%
+    left_join(variable_to_group, by = "Variable")
+  
+
+  ggplot(contrib_df, aes(x = reorder(Variable, Contribution), y = Contribution, fill = Group)) +
+    geom_bar(stat = "identity") +
+    coord_flip() +
+    labs(title = paste("Вклад переменных в", pc_col),
+         x = "Переменные", y = "Вклад") +
+    scale_fill_manual(values = c(
+      "Экономика" = "red",
+      "Промышленность и Торговля" = "green",
+      "Демография" = "orange",
+      "Здравоохранение" = "violet",
+      "Управление" = "blue"
+    )) +
+    theme_minimal()
+}
+
+
+pc_columns = names(rotated_loadings)[names(rotated_loadings) %in% c("RC1", "RC2", "RC3", "RC4")]
+
+for (pc in pc_columns) {
+  print(plot_contrib_with_groups(rotated_loadings, pc, variable_to_group))
+}
+```
+
+**Кластеризация на основе МГК**
+
+```{r}
+set.seed(123)
+pca_scores = as.data.frame(pca_rotated$scores)
+wss = sapply(1:10, function(k) {
+  kmeans(pca_scores, centers = k, nstart = 25)$tot.withinss
+})
+
+
+plot(1:10, wss, type = "b", pch = 19, frame = FALSE,
+     xlab = "Number of Clusters (k)", ylab = "Total Within-Cluster Sum of Squares",
+     main = "Elbow Method for Optimal k")
+
+```
+
+```{r}
+k4 = kmeans(pca_scores, centers = 4, nstart = 25)
+k5 = kmeans(pca_scores, centers = 5, nstart = 25)
+k6 = kmeans(pca_scores, centers = 6, nstart = 25)
+
+sil_k4 = silhouette(k4$cluster, dist(pca_scores))
+sil_k5 = silhouette(k5$cluster, dist(pca_scores))
+sil_k6 = silhouette(k6$cluster, dist(pca_scores))
+
+mean(sil_k4[, 3])  
+mean(sil_k5[, 3])  
+mean(sil_k6[, 3])
+```
+
+```{r}
+set.seed(123)  
+k = 5
+kmeans_result = kmeans(pca_scores, centers = k, nstart = 25)
+
+pca_scores$Cluster = as.factor(kmeans_result$cluster)
+```
+
+
+```{r}
+cluster_count_new = table(pca_scores$Cluster)
+cluster_df_new = as.data.frame(cluster_count_new)
+colnames(cluster_df_new) = c("Кластер", "Количество стран")
+
+cluster_df_new
+```
+```{r}
+country_cluster_table_new = pca_scores %>%
+  mutate(Country = rownames(pca_scores)) %>%  
+  select(Country, Cluster) %>%              
+  arrange(Cluster)    
+rownames(country_cluster_table_new) = NULL 
+
+datatable(country_cluster_table_new, 
+          options = list(pageLength = 10, autoWidth = TRUE), 
+          caption = "Распределение стран по кластерам")
+```
+
+```{r}
+colnames(pca_scores)[1:4] <- c("Доход и управление", 
+                               "Экспорт и индустриализация", 
+                               "ВВП и население", 
+                               "Инфляция и Безработица")
+```
+
+
+```{r}
+cluster_profiles_new = pca_scores%>%
+  group_by(Cluster) %>%
+  summarise(across(where(is.numeric), mean, na.rm = TRUE)) 
+
+datatable(cluster_profiles_new, 
+          options = list(pageLength = 5, autoWidth = TRUE), 
+          caption = "Профили кластеров")
+```
+
+```{r}
+library(tidyverse)
+
+cluster_profiles_long = pivot_longer(cluster_profiles_new, cols = -Cluster, 
+                                      names_to = "Признак", 
+                                      values_to = "Среднее_значение")
+# Create the plot
+ggplot(cluster_profiles_long, aes(x = Признак, y = Среднее_значение, color = Cluster)) +
+  geom_line(aes(group = Cluster)) +
+  geom_point() +
+  labs(title = "Профили кластеров",
+       x = "Признаки",
+       y = "Среднее значение") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+library(plotly)
+
+pca_scores$Cluster = as.factor(pca_scores$Cluster)
+
+fig <- plot_ly(
+  data = pca_scores,
+  x = ~`Доход и управление`,
+  y = ~`Экспорт и индустриализация`,
+  z = ~`Инфляция и Безработица`,
+  color = ~Cluster,
+  colors = "Set2",
+  type = "scatter3d",
+  mode = "markers",
+  marker = list(size = 5, opacity = 0.8)
+) %>%
+  layout(
+    title = "3Д визуализация кластеров",
+    scene = list(
+      xaxis = list(title = "PC1: Доход и управление"),
+      yaxis = list(title = "PC2: Экспорт и индустриализация"),
+      zaxis = list(title = "PC4: Инфляция и Безработица")
+    )
+  )
+
+fig
+
+
+```
+
+
+```{r message = FALSE}
+
+library(GGally)
+
+ggpairs(pca_scores, columns = 1:4, aes(color = Cluster, alpha = 0.6)) +
+  labs(title = "Pairwise Plots of PCs with Clusters") +
+  theme_minimal()
+```
+
+
+```{r}
+pca_scores %>%
+  ggplot(aes(x = `Доход и управление`, y = `Экспорт и индустриализация`, color = Cluster)) +
+  geom_point(size = 3, alpha = 0.7) +  
+  geom_text(aes(label = rownames(pca_scores)), 
+            color = 'black', 
+            size = 3,   
+            check_overlap = TRUE) +  
+  geom_rug(alpha = 0.5) +  
+  labs(title = "Доход и управление vs Экспорт и индустриализация",
+       x = "Доход и управление",
+       y = "Экспорт и индустриализация",
+       color = "Кластер") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10))
+
+
+```
+
+
+```{r}
+pca_scores %>%
+  ggplot(aes(x = `Доход и управление`, y = `Инфляция и Безработица`, color = Cluster)) +
+  geom_point(size = 3, alpha = 0.7) +  
+  geom_text(aes(label = rownames(pca_scores)), 
+            color = 'black', 
+            size = 3,    
+            check_overlap = TRUE) + 
+  geom_rug(alpha = 0.5) +  
+  labs(title = "Доход и управление vs Инфляция и безработица",
+       x = "Доход и управление",
+       y = "Инфляция и Безработица",
+       color = "Кластер") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10))
+```
+```{r}
+pca_scores %>%
+  ggplot(aes(x = `Экспорт и индустриализация`, y = `Инфляция и Безработица`, color = Cluster)) +
+  geom_point(size = 3, alpha = 0.7) +  
+  geom_text(aes(label = rownames(pca_scores)), 
+            color = 'black', 
+            size = 3,   
+            check_overlap = TRUE) +  
+  geom_rug(alpha = 0.5) +  
+  labs(title = "Доход и управление vs Инфляция и безработица",
+       x = "Экспорт и индустриализация",
+       y = "Инфляция и Безработица",
+       color = "Кластер") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 12),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10))
+```
+
+```{r}
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+
+w = pca_scores
+w = w %>%
+  rownames_to_column(var = "country_name") %>%  
+  mutate(cluster_label = case_when(
+    Cluster == 1 ~ "Хорошо управляемые страны с высоким уровнем дохода",
+    Cluster == 2 ~ "Страны с крайне высоким населением и ВВП",
+    Cluster == 3 ~ "Страны с высокой инфляцией и безработицей",
+    Cluster == 4 ~ "Эскпортоориентированные индустриальные страны",
+    Cluster == 5 ~ "Бедные аграрные экономики"
+  ))
+
+w = w %>%
+  mutate(country_name = case_when(
+    country_name == "Bahrain" ~ "Bahrain",
+    country_name == "Egypt, Arab Rep." ~ "Egypt",
+    country_name == "Bosnia and Herzegovina" ~ "Bosnia and Herz.",
+    country_name == "Central African Republic" ~ "Central African Rep.",
+    country_name == "Russian Federation" ~ "Russia",
+    country_name == "Dominican Republic" ~ "Dominican Rep.",
+    country_name == "Equatorial Guinea" ~ "Eq. Guinea",
+    country_name == "Eswatini" ~ "eSwatini",  
+    country_name == "Turkiye" ~ "Turkey",
+    country_name == "Mauritius" ~ "Mauritius",
+    country_name == "Samoa" ~ "Samoa",
+    country_name == "Singapore" ~ "Singapore",
+    country_name == "Solomon Islands" ~ "Solomon Is.",
+    country_name == "Tonga" ~ "Togo",
+    country_name == "United States" ~ "United States of America",
+    TRUE ~ country_name  
+  ))
+
+
+world <- ne_countries(scale = "small", returnclass = "sf") %>%
+  filter(geounit != 'Antarctica')
+
+
+world_with_clusters <- world %>%
+  select("country_name" = name, admin) %>% 
+  left_join(w %>% select(country_name, cluster_label), by = "country_name")
+
+map_plot = 
+  ggplot(world_with_clusters) +
+  geom_sf(aes(fill = factor(cluster_label)), color = "grey", size = 0.2) +
+  scale_fill_brewer(palette = "Set3", name = "Кластер") +
+  labs(title = "Глобальные экономические кластеры",
+       subtitle = "Кластеризация на основе МГК",
+       x = NULL, y = NULL) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold", color = "black"),
+    plot.subtitle = element_text(size = 10, color = "black"),
+    legend.title = element_text(size = 7, color = "black"),
+    legend.text = element_text(size = 7, color = "black"),
+    legend.position = "bottom", 
+    legend.box = "horizontal", 
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
+
+
+ggplotly(map_plot)
+```
+```{r}
+ggsave(
+  filename = "global_clusters_map_high_res.png",
+  plot = map_plot,
+  dpi = 600,
+  width = 25,
+  height = 15
+)
+```
+
+
+```{r}
+gdp_growth_table = gdp_growth_table %>%
+  rename(country_name = Country)
+
+merged_data = merge(
+  x = w,
+  y = gdp_growth_table,
+  by = "country_name",  
+  all.x = TRUE          
+)
+```
+
+
+```{r}
+mean_gdp_growth_by_cluster = merged_data %>%
+  group_by(cluster_label) %>%  
+  summarize(mean_gdp_growth = mean(GDP.growth.5year., na.rm = TRUE))
+
+
+print(mean_gdp_growth_by_cluster)
+```
+
+
+
+
+
